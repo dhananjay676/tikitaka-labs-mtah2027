@@ -1,6 +1,6 @@
 """Pseudo labels -> per frame H/A/D probabilities -> sticky decoding per half -> submission.
 
-    python possession/model.py                 # writes evaluation/results/v1.csv
+    python possession/model.py                 # writes evaluation/results/TikiTaka_Labs.csv
     python possession/model.py --name v1b      # another name
 
 No human labels anywhere. The public ground truth is never read here.
@@ -169,7 +169,7 @@ def spell_stats(labels, half):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="v2")
+    parser.add_argument("--name", default="TikiTaka_Labs")
     args = parser.parse_args()
     began = time.time()
 

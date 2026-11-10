@@ -1,6 +1,6 @@
 """One command from the raw match data to the submission file.
 
-    python possession/run_pipeline.py                     # writes evaluation/results/v2.csv
+    python possession/run_pipeline.py                     # writes evaluation/results/TikiTaka_Labs.csv
     python possession/run_pipeline.py --name my_team      # writes evaluation/results/my_team.csv
 
 Steps, in order (each is also runnable on its own):
@@ -31,7 +31,7 @@ def run(step, *args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--name", default="v2", help="submission file name, without .csv")
+    parser.add_argument("--name", default="TikiTaka_Labs", help="submission file name, without .csv")
     args = parser.parse_args()
     began = time.time()
 
