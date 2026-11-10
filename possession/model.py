@@ -47,6 +47,14 @@ TURNOVER_SHARE = 0.5         # of possession endings: half go straight to the ot
 EVIDENCE_WEIGHTS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.0]
 
 NOT_FEATURES = {"t", "half", "scored", "gt_public"}
+
+# Tried and dropped (v3): the "control" clues (who last had the ball under control) are built
+# from the same ingredients as the H/A pseudo label rule, so the learners copy the rule instead
+# of learning from independent evidence. Label free symptoms: the ball blind model's agreement
+# with the easy labels jumped from 94.6% to 98.5% although it cannot see the ball, and the
+# predicted dead share rose to 52%, above the 40 to 45% typical of a top flight match.
+# The features are still computed in features.py so the experiment can be repeated.
+EXCLUDED_PREFIXES = ("ctrl_",)
 BALL_WORDS = ("ball", "near_", "gap", "within_2m", "within_5m", "proxy", "dist_to")
 
 
@@ -78,6 +86,7 @@ def feature_sets(F):
     frames as it trained on.
     """
     seeing = [c for c in F.columns if c not in NOT_FEATURES
+              and not c.startswith(EXCLUDED_PREFIXES)
               and (np.issubdtype(F[c].dtype, np.number) or F[c].dtype == bool)]
     blind = [c for c in seeing
              if c.startswith(("tag_", "setpiece_")) or "cam" in c

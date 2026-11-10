@@ -274,6 +274,65 @@ def main():
     f["since_any_tag_start"] = since_event(np.isin(np.arange(D.N_FRAMES),
                                                    np.clip(tags["start"].values, 0, D.N_FRAMES - 1)))
 
+    print("\n9. Control: who last had the ball under control, and who has it next")
+    # CHALLENGE.md: possession changes only when the other team gains CONTROLLED possession;
+    # while the ball is loose or contested it stays with the last team. A controlled touch here
+    # is one team's player staying within 1 m of the ball, closer than any opponent by 0.5 m,
+    # for at least 5 frames (0.2 s) in a row. Single touches and deflections do not qualify.
+    near_h, near_a = frame["near_home"].values, frame["near_away"].values
+    touch_h = visible & (near_h < 1.0) & (near_h + 0.5 < np.nan_to_num(near_a, nan=99.0))
+    touch_a = visible & (near_a < 1.0) & (near_a + 0.5 < np.nan_to_num(near_h, nan=99.0))
+
+    def runs_at_least(mask, k):
+        out_mask = np.zeros_like(mask)
+        change = np.flatnonzero(np.diff(np.r_[0, mask.astype(np.int8), 0]))
+        for start, end in zip(change[::2], change[1::2]):
+            if end - start >= k:
+                out_mask[start:end] = True
+        return out_mask
+
+    ctrl_h = runs_at_least(touch_h, 5)
+    ctrl_a = runs_at_least(touch_a, 5)
+    ctrl = np.where(ctrl_h, 1, np.where(ctrl_a, -1, 0)).astype(np.int8)
+
+    def carry(values, backwards=False):
+        """Last non zero value (or next one, backwards), never across a half; and its distance."""
+        h = half[::-1] if backwards else half
+        v = values[::-1] if backwards else values
+        edges = np.flatnonzero(np.diff(h)) + 1
+        t_out = np.zeros(D.N_FRAMES, np.int8)
+        d_out = np.full(D.N_FRAMES, cap, np.int32)
+        for first, last in zip(np.r_[0, edges], np.r_[edges, D.N_FRAMES]):
+            idx = np.arange(last - first)
+            seen = np.maximum.accumulate(np.where(v[first:last] != 0, idx, -1))
+            ok_ = seen >= 0
+            t_out[first:last] = np.where(ok_, v[first:last][np.maximum(seen, 0)], 0)
+            d_out[first:last] = np.where(ok_, np.minimum(idx - seen, cap), cap)
+        if backwards:
+            t_out, d_out = t_out[::-1], d_out[::-1]
+        return t_out, d_out
+
+    f["ctrl_now"] = ctrl
+    f["ctrl_last_team"], f["ctrl_since"] = carry(ctrl)
+    f["ctrl_next_team"], f["ctrl_until"] = carry(ctrl, backwards=True)
+    f["ctrl_same_both_sides"] = ((f["ctrl_last_team"] == f["ctrl_next_team"])
+                                 & (f["ctrl_last_team"] != 0)).astype(np.int8)
+    # share of the last 3 s / next 3 s that each team spent in control
+    for secs in (3,):
+        w = secs * D.FPS
+        ch = pd.Series(ctrl_h.astype(float))
+        ca = pd.Series(ctrl_a.astype(float))
+        f["ctrl_home_past_{}s".format(secs)] = ch.rolling(w, min_periods=1).mean().values.astype(np.float32)
+        f["ctrl_away_past_{}s".format(secs)] = ca.rolling(w, min_periods=1).mean().values.astype(np.float32)
+        f["ctrl_home_next_{}s".format(secs)] = ch[::-1].rolling(w, min_periods=1).mean().values[::-1].astype(np.float32)
+        f["ctrl_away_next_{}s".format(secs)] = ca[::-1].rolling(w, min_periods=1).mean().values[::-1].astype(np.float32)
+    n_runs = int(np.sum(np.diff(np.r_[0, (ctrl != 0).astype(np.int8)]) == 1))
+    print("   controlled touch frames: Barcelona {:.1f}%  Athletic {:.1f}% of scored; {} control spells"
+          .format(100 * ctrl_h[scored].mean(), 100 * ctrl_a[scored].mean(), n_runs))
+    flips = np.flatnonzero(np.diff(f["ctrl_last_team"]) != 0)
+    print("   last controlling team changes {} times across the match".format(
+        int(np.sum(scored[flips]))))
+
     feats = pd.concat([frame, pd.DataFrame(f)], axis=1)
     path = os.path.join(D.DERIVED_DIR, "features.parquet")
     feats.to_parquet(path, index=False)
