@@ -43,7 +43,11 @@ H_, A_, D_ = 0, 1, 2
 
 MEAN_POSSESSION_S = 12.0     # general football prior for an unbroken team possession
 MEAN_DEAD_S = 10.0           # general prior for a stoppage
-TURNOVER_SHARE = 0.5         # of possession endings: half go straight to the other team
+TURNOVER_SHARE = 0.65        # of possession endings, the share that go straight to the other
+                             # team: a match has roughly 100 to 130 stoppages but some 250 to 350
+                             # possessions, so most possessions end in open play (tackle,
+                             # interception, misplaced pass), not at a stoppage. (v2 used 0.5)
+RESTART_LIVE_S = 8           # after a restart kick, play is live: no easy D for this long
 EVIDENCE_WEIGHTS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.0]
 
 NOT_FEATURES = {"t", "half", "scored", "gt_public"}
@@ -58,7 +62,7 @@ EXCLUDED_PREFIXES = ("ctrl_",)
 BALL_WORDS = ("ball", "near_", "gap", "within_2m", "within_5m", "proxy", "dist_to")
 
 
-def pseudo_labels(F):
+def pseudo_labels(F, restart_live_s=RESTART_LIVE_S):
     scored = F["scored"].values
     vis = F["ball_visible"].values & scored
     nh, na = F["near_home"].values, F["near_away"].values
@@ -70,7 +74,8 @@ def pseudo_labels(F):
     ball_quiet = ~(F["ball_disp_3s"].values > 3.0)    # moved under 3 m in 3 s, or not seen
     easy_h = vis & inside & calm & moving & (nh < 1.2) & (na > 3.0)
     easy_a = vis & inside & calm & moving & (na < 1.2) & (nh > 3.0)
-    easy_d = scored & ((F["ball_out_1s"].values > 0.6) | (walking & ball_quiet))
+    just_restarted = F["ball_since_restart_kick"].values < restart_live_s * D.FPS
+    easy_d = scored & ((F["ball_out_1s"].values > 0.6) | (walking & ball_quiet & ~just_restarted))
     y = np.full(len(F), -1, np.int8)
     y[easy_h], y[easy_a], y[easy_d] = H_, A_, D_
     y[(easy_h.astype(int) + easy_a + easy_d) > 1] = -1   # conflicting rules: leave unlabelled
@@ -119,12 +124,12 @@ def cross_fit(F, y, columns):
     return probs
 
 
-def log_transitions():
+def log_transitions(turnover_share=TURNOVER_SHARE):
     leave_p = 1.0 / (MEAN_POSSESSION_S * D.FPS)
     leave_d = 1.0 / (MEAN_DEAD_S * D.FPS)
     T = np.array([
-        [1 - leave_p, leave_p * TURNOVER_SHARE, leave_p * (1 - TURNOVER_SHARE)],
-        [leave_p * TURNOVER_SHARE, 1 - leave_p, leave_p * (1 - TURNOVER_SHARE)],
+        [1 - leave_p, leave_p * turnover_share, leave_p * (1 - turnover_share)],
+        [leave_p * turnover_share, 1 - leave_p, leave_p * (1 - turnover_share)],
         [leave_d / 2, leave_d / 2, 1 - leave_d],
     ])
     return np.log(T)
@@ -145,8 +150,8 @@ def viterbi(log_emit, log_T):
     return path
 
 
-def decode(probs, half, weight):
-    log_T = log_transitions()
+def decode(probs, half, weight, turnover_share=TURNOVER_SHARE):
+    log_T = log_transitions(turnover_share)
     labels = np.full(len(half), "X", dtype="<U1")
     for h in (1, 2):
         rows = np.flatnonzero(half == h)
@@ -170,6 +175,10 @@ def spell_stats(labels, half):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="TikiTaka_Labs")
+    parser.add_argument("--turnover-share", type=float, default=TURNOVER_SHARE,
+                        help="share of possession endings that go straight to the other team")
+    parser.add_argument("--restart-live-s", type=float, default=RESTART_LIVE_S,
+                        help="seconds after a restart kick with no easy D (0 switches it off)")
     args = parser.parse_args()
     began = time.time()
 
@@ -178,7 +187,9 @@ def main():
     scored = half > 0
 
     print("\n1. Pseudo labels (algorithmic rule, no human labels)")
-    y = pseudo_labels(F)
+    y = pseudo_labels(F, args.restart_live_s)
+    print("   settings: turnover share {:.2f}, restart live {:.0f} s".format(
+        args.turnover_share, args.restart_live_s))
     for code, name in enumerate("HAD"):
         print("   easy {}  {:>7} frames  ({:4.1f}% of scored)".format(
             name, int(np.sum(y == code)), 100 * np.mean(y[scored] == code)))
@@ -209,7 +220,7 @@ def main():
     print("   {:>7}  {:>11}  {:>13}  {:>9}".format("weight", "possessions", "mean length", "dead"))
     best = None
     for w in EVIDENCE_WEIGHTS:
-        labels = decode(probs, half, w)
+        labels = decode(probs, half, w, args.turnover_share)
         n, mean_s, dead = spell_stats(labels, half)
         print("   {:>7.2f}  {:>11}  {:>11.1f} s  {:>8.1f}%".format(w, n, mean_s, 100 * dead))
         gap = abs(np.log(max(mean_s, 0.1) / MEAN_POSSESSION_S))

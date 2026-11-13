@@ -274,6 +274,25 @@ def main():
     f["since_any_tag_start"] = since_event(np.isin(np.arange(D.N_FRAMES),
                                                    np.clip(tags["start"].values, 0, D.N_FRAMES - 1)))
 
+    # v4: "play just restarted". A restart (goal kick, free kick, throw in, kickoff) sends the
+    # ball travelling while most players are still walking, so the pitch looks like a stoppage
+    # for a few more seconds although the referee has restarted play. A kick here is the ball
+    # moving more than 10 m in 1 s, seen on most frames of that second (a tracking jump that
+    # re-finds the ball elsewhere does not count). It is a restart kick if the pitch was walking
+    # (3 s pace under 1.2 m/s) at some point in the 5 s before it.
+    seen_1s = rolling(visible.astype(float), 25)
+    disp_1s = np.hypot(same_half_shift(bx, half, 12) - same_half_shift(bx, half, -12),
+                       same_half_shift(by, half, 12) - same_half_shift(by, half, -12))
+    kick = (disp_1s > 10) & (seen_1s > 0.8) & ~out
+    walked = pd.Series((f["speed_mean_all_3s"] < 1.2).astype(float)).rolling(
+        5 * D.FPS, min_periods=1).max().values > 0
+    restart_kick = kick & walked
+    f["ball_disp_1s"] = disp_1s.astype(np.float32)
+    f["ball_since_kick"] = since_event(kick)
+    f["ball_since_restart_kick"] = since_event(restart_kick)
+    starts_rk = int(np.sum(np.diff(np.r_[0, restart_kick[scored].astype(np.int8)]) == 1))
+    print("   restart kicks found: {} (a match has roughly 100 to 130 restarts)".format(starts_rk))
+
     print("\n9. Control: who last had the ball under control, and who has it next")
     # CHALLENGE.md: possession changes only when the other team gains CONTROLLED possession;
     # while the ball is loose or contested it stays with the last team. A controlled touch here
