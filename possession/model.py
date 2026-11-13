@@ -48,6 +48,9 @@ TURNOVER_SHARE = 0.65        # of possession endings, the share that go straight
                              # possessions, so most possessions end in open play (tackle,
                              # interception, misplaced pass), not at a stoppage. (v2 used 0.5)
 RESTART_LIVE_S = 8           # after a restart kick, play is live: no easy D for this long
+MIN_DEAD_S = 3.0             # v5: a stoppage with the SAME team before and after that lasts
+                             # under this long is a model blip (fetching the ball and taking a
+                             # restart takes longer), so H D H becomes H H H. H D A is kept.
 EVIDENCE_WEIGHTS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.0]
 
 NOT_FEATURES = {"t", "half", "scored", "gt_public"}
@@ -160,6 +163,40 @@ def decode(probs, half, weight, turnover_share=TURNOVER_SHARE):
     return labels
 
 
+def merge_short_dead(labels, half, min_dead_s):
+    """Fill dead runs shorter than min_dead_s that have the same team on both sides.
+
+    Returns (labels, number of runs filled). Runs at the edge of a half, or between different
+    teams, are left alone. 0 switches it off.
+    """
+    labels = labels.copy()
+    filled = 0
+    if min_dead_s <= 0:
+        return labels, 0
+    limit = int(round(min_dead_s * D.FPS))
+    for h in (1, 2):
+        rows = np.flatnonzero(half == h)
+        lab = labels[rows]
+        change = np.flatnonzero(lab[1:] != lab[:-1]) + 1
+        starts, ends = np.r_[0, change], np.r_[change, len(lab)]
+        for i in range(1, len(starts) - 1):
+            s_, e_ = starts[i], ends[i]
+            if lab[s_] == "D" and e_ - s_ < limit and lab[s_ - 1] == lab[e_] and lab[e_] in ("H", "A"):
+                lab[s_:e_] = lab[e_]
+                filled += 1
+        labels[rows] = lab
+    return labels, filled
+
+
+def dead_run_lengths(labels, half):
+    out = []
+    for h in (1, 2):
+        lab = labels[half == h]
+        change = np.flatnonzero(lab[1:] != lab[:-1]) + 1
+        out += [e - s for s, e in zip(np.r_[0, change], np.r_[change, len(lab)]) if lab[s] == "D"]
+    return np.array(out) / D.FPS
+
+
 def spell_stats(labels, half):
     """(possessions, mean possession seconds, dead share) over scored frames."""
     lengths = []
@@ -179,6 +216,8 @@ def main():
                         help="share of possession endings that go straight to the other team")
     parser.add_argument("--restart-live-s", type=float, default=RESTART_LIVE_S,
                         help="seconds after a restart kick with no easy D (0 switches it off)")
+    parser.add_argument("--min-dead-s", type=float, default=MIN_DEAD_S,
+                        help="fill same team dead runs shorter than this (0 switches it off)")
     args = parser.parse_args()
     began = time.time()
 
@@ -188,8 +227,8 @@ def main():
 
     print("\n1. Pseudo labels (algorithmic rule, no human labels)")
     y = pseudo_labels(F, args.restart_live_s)
-    print("   settings: turnover share {:.2f}, restart live {:.0f} s".format(
-        args.turnover_share, args.restart_live_s))
+    print("   settings: turnover share {:.2f}, restart live {:.0f} s, min dead {:.1f} s".format(
+        args.turnover_share, args.restart_live_s, args.min_dead_s))
     for code, name in enumerate("HAD"):
         print("   easy {}  {:>7} frames  ({:4.1f}% of scored)".format(
             name, int(np.sum(y == code)), 100 * np.mean(y[scored] == code)))
@@ -221,6 +260,7 @@ def main():
     best = None
     for w in EVIDENCE_WEIGHTS:
         labels = decode(probs, half, w, args.turnover_share)
+        labels, _ = merge_short_dead(labels, half, args.min_dead_s)
         n, mean_s, dead = spell_stats(labels, half)
         print("   {:>7.2f}  {:>11}  {:>11.1f} s  {:>8.1f}%".format(w, n, mean_s, 100 * dead))
         gap = abs(np.log(max(mean_s, 0.1) / MEAN_POSSESSION_S))
@@ -228,6 +268,17 @@ def main():
             best = (gap, w, labels)
     _, weight, labels = best
     print("   chosen weight {:.2f}".format(weight))
+
+    print("\n4. Stoppage lengths (label free check)")
+    raw = decode(probs, half, weight, args.turnover_share)
+    runs = dead_run_lengths(raw, half)
+    print("   before merging: {} stoppages, {} shorter than {:.0f} s, median {:.1f} s".format(
+        len(runs), int(np.sum(runs < args.min_dead_s)), args.min_dead_s, np.median(runs) if len(runs) else 0))
+    _, filled = merge_short_dead(raw, half, args.min_dead_s)
+    runs = dead_run_lengths(labels, half)
+    print("   filled {} short same team stoppages; now {} stoppages, median {:.1f} s".format(
+        filled, len(runs), np.median(runs) if len(runs) else 0))
+    print("   (a match has roughly 100 to 130 real stoppages)")
 
     labels[~scored] = "X"
     path = os.path.join(D.ROOT, "evaluation", "results", "{}.csv".format(args.name))
