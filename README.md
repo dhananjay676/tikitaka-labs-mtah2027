@@ -1,3 +1,20 @@
+# TikiTaka Labs: Phase 1 submission
+
+Our method and results are in **[TECHNICAL.md](TECHNICAL.md)**. Our code is in **[`possession/`](possession/)**.
+
+Reproduce our submission from the organisers' data bundle (four tactical files in `data/tactical/`):
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-possession.txt
+python possession/run_pipeline.py      # writes evaluation/results/TikiTaka_Labs.csv, about 30 s
+```
+
+The pipeline is deterministic and uses no human labels. Everything below this section is the
+organisers' original README.
+
+---
+
 # More than a Hack 2027 — Phase 1: Ball Possession
 
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
