@@ -49,7 +49,8 @@ What we learned from the data, and what we did about it:
 | x = 0 is the left goal line; teams swap ends at halftime | Attack direction derived per half from team centroids |
 | 42% of frames carry tags for both teams at once | The tag **name** decides the side: "Build Up" for team X means X has the ball, "Defending in Middle Third" for X means X does not |
 
-**Dropped or not used:** the tactical video (only watched to understand the data, never labelled),
+**Dropped or not used:** the tactical video (watched to understand the data and used in a ball
+detection test, section 6; never labelled),
 the whole broadcast recording (not synchronised, out of scope for the time available), and the
 provided ball speed column.
 
@@ -184,8 +185,28 @@ neither hurts any check, but the turnover share's own effect is small.
 * **Single match.** Pseudo labels and models are trained on the test match itself, without labels.
   Behaviour on another match is untested.
 
-**With more time:** find the ball in the tactical video where tracking loses it, and project it back
-with the homography; separate air balls from ground balls using the path the ball traces under the
+### Tried and not used: finding the ball in the video
+
+The obvious next step is to find the ball in the tactical video where the tracker loses it, and
+project it onto the pitch with the homography. We tested this with a public pretrained detector
+(Ultralytics YOLO11, COCO class "sports ball") on the first five minutes of play, every tenth
+frame, using the **tracking** as the reference (no labels): on frames where the tracker sees the
+ball, does the detector's most confident box land on it?
+
+| Model, image size | Best setting | Top box is the ball | Precision | Full run time |
+|---|---|---|---|---|
+| YOLO11m, 1920 px | confidence 0.40 | 42% | 73% | about 4.4 h |
+| YOLO11s, 1280 px | confidence 0.50 | 11% | 71% | about 1 h |
+
+Detections more than 3 m outside the pitch were removed first. Precision levels off near 73% at
+every threshold, so about one added ball in four would be in the wrong place. A wrong ball position
+in a long gap is worse than none: it creates false turnovers exactly where spellF1 is most sensitive.
+We had set a minimum of 80% precision before running the test, so the method was not used.
+The probe is in `possession/cv_probe.py` (it needs `pip install ultralytics opencv-python`,
+and is not part of the submission pipeline).
+
+**With more time:** make video ball detection reliable, by keeping only detections that form a
+smooth track over time, or by fine tuning the detector on footballs from other matches; separate air balls from ground balls using the path the ball traces under the
 camera's view; synchronise the broadcast feed; model a minimum stoppage length inside the decoder
 rather than as a post step.
 
